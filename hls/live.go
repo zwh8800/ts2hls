@@ -33,9 +33,14 @@ type Live struct {
 	state liveState
 	buf   bytes.Buffer
 
-	program      *astits.PATProgram
+	program *astits.PATProgram
+
 	isMpegAudio  bool
 	mpegAudioPmt *astits.PMTElementaryStream
+	mpegMp2Buf   *mpeg.Buffer
+	mpegDecoder  *mpeg.Audio
+	mpegPcmBuf   *bytes.Buffer
+	mpegAACBuf   *bytes.Buffer
 }
 
 func NewLive(ctx context.Context, src string, interval time.Duration) (*Live, error) {
@@ -137,6 +142,16 @@ func (l *Live) pmt() error {
 				l.isMpegAudio = true
 				l.mpegAudioPmt = es
 
+				l.mpegMp2Buf, err = mpeg.NewBuffer(nil)
+				if err != nil {
+					return err
+				}
+
+				l.mpegDecoder = mpeg.NewAudio(l.mpegMp2Buf)
+				l.mpegDecoder.SetFormat(mpeg.AudioS16)
+				l.mpegPcmBuf = bytes.NewBuffer(nil)
+				l.mpegAACBuf = bytes.NewBuffer(nil)
+
 				err = l.mx.AddElementaryStream(astits.PMTElementaryStream{
 					ElementaryPID: es.ElementaryPID,
 					StreamType:    astits.StreamTypeADTS,
@@ -162,7 +177,7 @@ func (l *Live) pmt() error {
 
 func (l *Live) pes() error {
 	first := true
-	var startTime time.Time
+	var startTime *astits.ClockReference
 
 	for {
 		d, err := l.dmx.NextData()
@@ -178,7 +193,7 @@ func (l *Live) pes() error {
 			return errors.New("pts is nil")
 		}
 
-		pts := d.PES.Header.OptionalHeader.PTS.Time()
+		pts := d.PES.Header.OptionalHeader.PTS
 
 		if first {
 			startTime = pts
@@ -189,60 +204,18 @@ func (l *Live) pes() error {
 			first = false
 		}
 
-		if l.isMpegAudio && d.PID == l.mpegAudioPmt.ElementaryPID {
-			readBuf, err := mpeg.NewBuffer(bytes.NewReader(d.PES.Data))
-			if err != nil {
-				return err
-			}
-			readBuf.SetLoadCallback(readBuf.LoadReaderCallback)
-
-			decoder := mpeg.NewAudio(readBuf)
-			if !decoder.HasHeader() {
-				return errors.New("HasHeader: no header")
-			}
-			decoder.SetFormat(mpeg.AudioS16)
-
-			writeBuf := bytes.NewBuffer(nil)
-			encoder, err := aac.NewEncoder(writeBuf, &aac.Options{
-				SampleRate:  decoder.Samplerate(),
-				NumChannels: decoder.Channels(),
-			})
-			if err != nil {
-				return err
-			}
-
-			decoder.Rewind()
+		if l.isMpegAudio && d.PID == l.mpegAudioPmt.ElementaryPID { // mpeg 音频数据 解码并存储
+			l.mpegMp2Buf.Write(d.PES.Data)
 
 			for {
-				sample := decoder.Decode()
+				sample := l.mpegDecoder.Decode()
 				if sample == nil {
 					break
 				}
 
-				err := encoder.Encode(bytes.NewReader(sample.Bytes()))
-				if err != nil {
-					return err
-				}
-			}
-			err = encoder.Close()
-			if err != nil {
-				return err
+				l.mpegPcmBuf.Write(sample.Bytes())
 			}
 
-			_, err = l.mx.WriteData(&astits.MuxerData{
-				PID: d.PID,
-				PES: &astits.PESData{
-					Data: writeBuf.Bytes(),
-					Header: &astits.PESHeader{OptionalHeader: &astits.PESOptionalHeader{
-						DataAlignmentIndicator: true,
-						PTSDTSIndicator:        astits.PTSDTSIndicatorOnlyPTS,
-						PTS:                    d.PES.Header.OptionalHeader.PTS,
-					}},
-				},
-			})
-			if err != nil {
-				return err
-			}
 		} else {
 			_, err := l.mx.WriteData(&astits.MuxerData{
 				PID: d.PID,
@@ -253,7 +226,45 @@ func (l *Live) pes() error {
 			}
 		}
 
-		if pts.After(startTime.Add(l.interval)) {
+		if pts.Time().After(startTime.Time().Add(l.interval)) {
+			if l.isMpegAudio { // 在结束阶段特殊处理音频数据
+				l.mpegAACBuf.Reset()
+				encoder, err := aac.NewEncoder(l.mpegAACBuf, &aac.Options{
+					SampleRate:  l.mpegDecoder.Samplerate(),
+					NumChannels: l.mpegDecoder.Channels(),
+				})
+				if err != nil {
+					return err
+				}
+
+				err = encoder.Encode(l.mpegPcmBuf)
+				if err != nil {
+					return err
+				}
+
+				err = encoder.Close()
+				if err != nil {
+					return err
+				}
+
+				l.mpegPcmBuf.Reset()
+
+				_, err = l.mx.WriteData(&astits.MuxerData{
+					PID: d.PID,
+					PES: &astits.PESData{
+						Data: l.mpegAACBuf.Bytes(),
+						Header: &astits.PESHeader{OptionalHeader: &astits.PESOptionalHeader{
+							DataAlignmentIndicator: true,
+							PTSDTSIndicator:        astits.PTSDTSIndicatorOnlyPTS,
+							PTS:                    startTime,
+						}},
+					},
+				})
+				if err != nil {
+					return err
+				}
+			}
+
 			l.state = liveStateEnd
 			return nil
 		}
