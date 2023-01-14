@@ -42,6 +42,7 @@ type Live struct {
 	mpegEncoder  *aac.Encoder
 	mpegPcmBuf   *bytes.Buffer
 	mpegAACBuf   *bytes.Buffer
+	mpegLastTime *astits.ClockReference
 }
 
 func NewLive(ctx context.Context, src string, interval time.Duration) (*Live, error) {
@@ -164,11 +165,13 @@ func (l *Live) pmt() error {
 					StreamType:                  es.StreamType,
 				})
 			}
-
 			if err != nil {
 				return err
 			}
-			l.mx.SetPCRPID(es.ElementaryPID)
+
+			if es.StreamType.IsVideo() {
+				l.mx.SetPCRPID(es.ElementaryPID)
+			}
 		}
 
 		l.state = liveStatePES
@@ -176,8 +179,9 @@ func (l *Live) pmt() error {
 	}
 }
 
+const audioInterval = 500 * time.Millisecond
+
 func (l *Live) pes() error {
-	first := true
 	var startTime *astits.ClockReference
 
 	for {
@@ -196,27 +200,33 @@ func (l *Live) pes() error {
 
 		pts := d.PES.Header.OptionalHeader.PTS
 
-		if first {
+		if startTime == nil {
 			startTime = pts
 			_, err = l.mx.WriteTables()
 			if err != nil {
 				return err
 			}
-			first = false
 		}
 
-		if l.isMpegAudio && d.PID == l.mpegAudioPmt.ElementaryPID { // mpeg 音频数据 解码并存储
-			l.mpegMp2Buf.Write(d.PES.Data)
+		if l.isMpegAudio &&
+			d.PID == l.mpegAudioPmt.ElementaryPID { // mpeg 音频数据 解码并存储
 
-			for {
-				sample := l.mpegDecoder.Decode()
-				if sample == nil {
-					break
-				}
-
-				l.mpegPcmBuf.Write(sample.Bytes())
+			// 1. 记录音频流第一次时间戳
+			if l.mpegLastTime == nil {
+				l.mpegLastTime = pts
 			}
 
+			// 2. 解码并缓存
+			l.decodeAudio(d)
+
+			// 3. 判断距离上次编码，时间是否超过 audioInterval，超过则编码并输出
+			if pts.Time().After(l.mpegLastTime.Time().Add(audioInterval)) {
+				err := l.encodeAudio()
+				if err != nil {
+					return err
+				}
+				l.mpegLastTime = nil
+			}
 		} else {
 			_, err := l.mx.WriteData(&astits.MuxerData{
 				PID: d.PID,
@@ -228,35 +238,9 @@ func (l *Live) pes() error {
 		}
 
 		if pts.Time().After(startTime.Time().Add(l.interval)) {
-			if l.isMpegAudio { // 在结束阶段特殊处理音频数据
-				err := l.checkEncoder()
-				if err != nil {
-					return err
-				}
-
-				l.mpegAACBuf.Reset() // 重置输出
-
-				err = l.mpegEncoder.Encode(l.mpegPcmBuf) // 编码（输入->输出）
-				if err != nil {
-					return err
-				}
-
-				l.mpegPcmBuf.Reset() // 重置输入
-
-				_, err = l.mx.WriteData(&astits.MuxerData{
-					PID: d.PID,
-					PES: &astits.PESData{
-						Data: l.mpegAACBuf.Bytes(),
-						Header: &astits.PESHeader{OptionalHeader: &astits.PESOptionalHeader{
-							DataAlignmentIndicator: true,
-							PTSDTSIndicator:        astits.PTSDTSIndicatorOnlyPTS,
-							PTS:                    startTime,
-						}},
-					},
-				})
-				if err != nil {
-					return err
-				}
+			err := l.encodeAudio()
+			if err != nil {
+				return err
 			}
 
 			l.state = liveStateEnd
@@ -264,6 +248,50 @@ func (l *Live) pes() error {
 		}
 	}
 
+}
+
+func (l *Live) decodeAudio(d *astits.DemuxerData) {
+	l.mpegMp2Buf.Write(d.PES.Data)
+	for {
+		sample := l.mpegDecoder.Decode()
+		if sample == nil {
+			break
+		}
+
+		l.mpegPcmBuf.Write(sample.Bytes())
+	}
+}
+
+func (l *Live) encodeAudio() error {
+	err := l.checkEncoder()
+	if err != nil {
+		return err
+	}
+
+	l.mpegAACBuf.Reset() // 重置输出
+
+	err = l.mpegEncoder.Encode(l.mpegPcmBuf) // 编码（输入->输出）
+	if err != nil {
+		return err
+	}
+
+	l.mpegPcmBuf.Reset() // 重置输入
+
+	_, err = l.mx.WriteData(&astits.MuxerData{
+		PID: l.mpegAudioPmt.ElementaryPID,
+		PES: &astits.PESData{
+			Data: l.mpegAACBuf.Bytes(),
+			Header: &astits.PESHeader{OptionalHeader: &astits.PESOptionalHeader{
+				DataAlignmentIndicator: true,
+				PTSDTSIndicator:        astits.PTSDTSIndicatorOnlyPTS,
+				PTS:                    l.mpegLastTime,
+			}},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (l *Live) checkEncoder() error {
