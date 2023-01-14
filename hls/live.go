@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/asticode/go-astits"
+	"github.com/gen2brain/aac-go"
+	"github.com/gen2brain/mpeg"
 	"go.uber.org/zap"
 )
 
@@ -31,7 +33,9 @@ type Live struct {
 	state liveState
 	buf   bytes.Buffer
 
-	program *astits.PATProgram
+	program      *astits.PATProgram
+	isMpegAudio  bool
+	mpegAudioPmt *astits.PMTElementaryStream
 }
 
 func NewLive(ctx context.Context, src string, interval time.Duration) (*Live, error) {
@@ -128,11 +132,23 @@ func (l *Live) pmt() error {
 		for _, es := range d.PMT.ElementaryStreams {
 			l.logger.Infof("Stream detected: PID: %d, StreamType: %s",
 				es.ElementaryPID, es.StreamType.String())
-			err := l.mx.AddElementaryStream(astits.PMTElementaryStream{
-				ElementaryPID:               es.ElementaryPID,
-				ElementaryStreamDescriptors: es.ElementaryStreamDescriptors,
-				StreamType:                  es.StreamType,
-			})
+
+			if es.StreamType == astits.StreamTypeMPEG1Audio {
+				l.isMpegAudio = true
+				l.mpegAudioPmt = es
+
+				err = l.mx.AddElementaryStream(astits.PMTElementaryStream{
+					ElementaryPID: es.ElementaryPID,
+					StreamType:    astits.StreamTypeADTS,
+				})
+			} else {
+				err = l.mx.AddElementaryStream(astits.PMTElementaryStream{
+					ElementaryPID:               es.ElementaryPID,
+					ElementaryStreamDescriptors: es.ElementaryStreamDescriptors,
+					StreamType:                  es.StreamType,
+				})
+			}
+
 			if err != nil {
 				return err
 			}
@@ -173,13 +189,68 @@ func (l *Live) pes() error {
 			first = false
 		}
 
-		_, err = l.mx.WriteData(&astits.MuxerData{
-			PID: d.PID,
-			PES: d.PES,
-		})
+		if l.isMpegAudio && d.PID == l.mpegAudioPmt.ElementaryPID {
+			readBuf, err := mpeg.NewBuffer(bytes.NewReader(d.PES.Data))
+			if err != nil {
+				return err
+			}
+			readBuf.SetLoadCallback(readBuf.LoadReaderCallback)
 
-		if err != nil {
-			return err
+			decoder := mpeg.NewAudio(readBuf)
+			if !decoder.HasHeader() {
+				return errors.New("HasHeader: no header")
+			}
+			decoder.SetFormat(mpeg.AudioS16)
+
+			writeBuf := bytes.NewBuffer(nil)
+			encoder, err := aac.NewEncoder(writeBuf, &aac.Options{
+				SampleRate:  decoder.Samplerate(),
+				NumChannels: decoder.Channels(),
+			})
+			if err != nil {
+				return err
+			}
+
+			decoder.Rewind()
+
+			for {
+				sample := decoder.Decode()
+				if sample == nil {
+					break
+				}
+
+				err := encoder.Encode(bytes.NewReader(sample.Bytes()))
+				if err != nil {
+					return err
+				}
+			}
+			err = encoder.Close()
+			if err != nil {
+				return err
+			}
+
+			_, err = l.mx.WriteData(&astits.MuxerData{
+				PID: d.PID,
+				PES: &astits.PESData{
+					Data: writeBuf.Bytes(),
+					Header: &astits.PESHeader{OptionalHeader: &astits.PESOptionalHeader{
+						DataAlignmentIndicator: true,
+						PTSDTSIndicator:        astits.PTSDTSIndicatorOnlyPTS,
+						PTS:                    d.PES.Header.OptionalHeader.PTS,
+					}},
+				},
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err := l.mx.WriteData(&astits.MuxerData{
+				PID: d.PID,
+				PES: d.PES,
+			})
+			if err != nil {
+				return err
+			}
 		}
 
 		if pts.After(startTime.Add(l.interval)) {
