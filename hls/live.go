@@ -39,6 +39,7 @@ type Live struct {
 	mpegAudioPmt *astits.PMTElementaryStream
 	mpegMp2Buf   *mpeg.Buffer
 	mpegDecoder  *mpeg.Audio
+	mpegEncoder  *aac.Encoder
 	mpegPcmBuf   *bytes.Buffer
 	mpegAACBuf   *bytes.Buffer
 }
@@ -228,26 +229,19 @@ func (l *Live) pes() error {
 
 		if pts.Time().After(startTime.Time().Add(l.interval)) {
 			if l.isMpegAudio { // 在结束阶段特殊处理音频数据
-				l.mpegAACBuf.Reset()
-				encoder, err := aac.NewEncoder(l.mpegAACBuf, &aac.Options{
-					SampleRate:  l.mpegDecoder.Samplerate(),
-					NumChannels: l.mpegDecoder.Channels(),
-				})
+				err := l.checkEncoder()
 				if err != nil {
 					return err
 				}
 
-				err = encoder.Encode(l.mpegPcmBuf)
+				l.mpegAACBuf.Reset() // 重置输出
+
+				err = l.mpegEncoder.Encode(l.mpegPcmBuf) // 编码（输入->输出）
 				if err != nil {
 					return err
 				}
 
-				err = encoder.Close()
-				if err != nil {
-					return err
-				}
-
-				l.mpegPcmBuf.Reset()
+				l.mpegPcmBuf.Reset() // 重置输入
 
 				_, err = l.mx.WriteData(&astits.MuxerData{
 					PID: d.PID,
@@ -270,6 +264,23 @@ func (l *Live) pes() error {
 		}
 	}
 
+}
+
+func (l *Live) checkEncoder() error {
+	if l.mpegEncoder != nil {
+		return nil
+
+	}
+	var err error
+	l.mpegEncoder, err = aac.NewEncoder(l.mpegAACBuf, &aac.Options{
+		SampleRate:  l.mpegDecoder.Samplerate(),
+		NumChannels: l.mpegDecoder.Channels(),
+		BitRate:     128000,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (l *Live) Close() {
