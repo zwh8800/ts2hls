@@ -97,6 +97,12 @@ func (h *Hls) GetLive() (string, error) {
 }
 
 func (h *Hls) doLive() {
+	defer func() {
+		err := recover()
+		if err != nil {
+			h.logger.Errorf("doLive err: %v", err)
+		}
+	}()
 	first := true
 	for {
 		if _, ok := hlsCache.Get(h.hashName); !ok {

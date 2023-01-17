@@ -13,6 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const audioInterval = 100 * time.Millisecond
+
 type liveState int
 
 const (
@@ -179,8 +181,6 @@ func (l *Live) pmt() error {
 	}
 }
 
-const audioInterval = 500 * time.Millisecond
-
 func (l *Live) pes() error {
 	var startTime *astits.ClockReference
 
@@ -238,9 +238,11 @@ func (l *Live) pes() error {
 		}
 
 		if pts.Time().After(startTime.Time().Add(l.interval)) {
-			err := l.encodeAudio()
-			if err != nil {
-				return err
+			if l.isMpegAudio {
+				err := l.encodeAudio()
+				if err != nil {
+					return err
+				}
 			}
 
 			l.state = liveStateEnd
