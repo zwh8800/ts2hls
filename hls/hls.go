@@ -97,24 +97,27 @@ func (h *Hls) GetLive() (string, error) {
 }
 
 func (h *Hls) doLive() {
+	first := true
 	defer func() {
 		err := recover()
 		if err != nil {
 			h.logger.Errorf("doLive err: %v", err)
 		}
+		h.Close()
+
+		if first {
+			close(h.first)
+		}
 	}()
-	first := true
 	for {
 		if _, ok := hlsCache.Get(h.hashName); !ok {
 			h.logger.Infof("live %s expired, closing", h.src)
-			h.Close()
 			return
 		}
 
 		data, err := h.live.ReadInterval()
 		if err != nil {
 			h.logger.Errorf("ReadInterval err: %s", err.Error())
-			h.Close()
 			return
 		}
 
