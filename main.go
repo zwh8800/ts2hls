@@ -11,7 +11,10 @@ import (
 	"github.com/zwh8800/ts2hls/hls"
 )
 
-const tsInterval = 1 * time.Second
+var (
+	addr       string
+	tsInterval time.Duration
+)
 
 const (
 	contentTypeM3u8 = "application/vnd.apple.mpegurl"
@@ -23,14 +26,25 @@ func pprof() {
 }
 
 func main() {
-	addr := flag.String("addr", ":1323", "addr to listen")
-	flag.Parse()
+	args()
+
 	pprof()
 	e := echo.New()
 	e.Use(middleware.Recover(), middleware.Logger())
 	e.GET("/live.m3u8", liveHandler)
 	e.GET("/:live/:num/live.ts", tsHandler)
-	e.Logger.Fatal(e.Start(*addr))
+	e.Logger.Fatal(e.Start(addr))
+}
+
+func args() {
+	var err error
+	flag.StringVar(&addr, "addr", ":1323", "addr to listen")
+	tsInt := flag.String("i", "1000ms", "ts interval")
+	flag.Parse()
+	tsInterval, err = time.ParseDuration(*tsInt)
+	if err != nil {
+		tsInterval = 1000 * time.Millisecond
+	}
 }
 
 func liveHandler(c echo.Context) error {
