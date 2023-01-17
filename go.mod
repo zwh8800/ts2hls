@@ -3,7 +3,8 @@ module github.com/zwh8800/ts2hls
 go 1.19
 
 replace (
-	github.com/gen2brain/mpeg => ../mpeg
+	github.com/gen2brain/aac-go => github.com/zwh8800/aac-go v0.1.0
+	github.com/gen2brain/mpeg => github.com/zwh8800/mpeg v0.2.3
 )
 
 require (
@@ -24,7 +25,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
-	github.com/youpy/go-wav v0.3.2 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
 	golang.org/x/crypto v0.2.0 // indirect
