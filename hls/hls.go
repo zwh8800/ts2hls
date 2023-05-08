@@ -16,14 +16,19 @@ var (
 	hlsCache = cache.New(3*time.Minute, 5*time.Minute)
 )
 
+func Init(hlsExpire time.Duration) {
+	hlsCache = cache.New(hlsExpire, 5*time.Minute)
+}
+
+// Hls represents an hls stream
 type Hls struct {
 	src      string
 	interval time.Duration
 
 	hashName string
 
-	live  *Live
-	plist *m3u8.MediaPlaylist
+	transcoder *Transcoder
+	plist      *m3u8.MediaPlaylist
 
 	sequence int
 	once     sync.Once
@@ -32,6 +37,7 @@ type Hls struct {
 	logger   *zap.SugaredLogger
 }
 
+// NewHls creates a Hls and put it into hls pool
 func NewHls(src string, interval time.Duration) (*Hls, error) {
 	hls, ok := hlsCache.Get(hashHls(src))
 	if !ok {
@@ -45,6 +51,7 @@ func NewHls(src string, interval time.Duration) (*Hls, error) {
 	return hls.(*Hls), nil
 }
 
+// GetHls get a running Hls from hls pool by hashName
 func GetHls(hashName string) *Hls {
 	hls, ok := hlsCache.Get(hashName)
 	if !ok {
@@ -57,7 +64,7 @@ func GetHls(hashName string) *Hls {
 func newHls(src string, interval time.Duration) (*Hls, error) {
 	ctx := context.Background()
 
-	l, err := NewLive(ctx, src, interval)
+	l, err := NewTranscoder(ctx, src, interval)
 	if err != nil {
 		return nil, err
 	}
@@ -70,15 +77,15 @@ func newHls(src string, interval time.Duration) (*Hls, error) {
 	logger, _ := zap.NewProduction()
 
 	return &Hls{
-		src:      src,
-		interval: interval,
-		hashName: hashHls(src),
-		live:     l,
-		plist:    p,
-		sequence: 0,
-		tsCache:  cache.New(1*time.Minute, 1*time.Minute),
-		first:    make(chan struct{}),
-		logger:   logger.Sugar(),
+		src:        src,
+		interval:   interval,
+		hashName:   hashHls(src),
+		transcoder: l,
+		plist:      p,
+		sequence:   0,
+		tsCache:    cache.New(1*time.Minute, 1*time.Minute),
+		first:      make(chan struct{}),
+		logger:     logger.Sugar(),
 	}, nil
 }
 
@@ -86,6 +93,7 @@ func hashHls(src string) string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(src)))
 }
 
+// GetLive returns m3u8 file data
 func (h *Hls) GetLive() (string, error) {
 	h.once.Do(func() {
 		go h.doLive()
@@ -115,7 +123,7 @@ func (h *Hls) doLive() {
 			return
 		}
 
-		data, err := h.live.ReadInterval()
+		data, err := h.transcoder.ReadInterval()
 		if err != nil {
 			h.logger.Errorf("ReadInterval err: %s", err.Error())
 			return
@@ -135,12 +143,14 @@ func (h *Hls) doLive() {
 	}
 }
 
+// Close stop transcoding and remove Hls from hls pool
 func (h *Hls) Close() {
 	defer func() { recover() }()
 	hlsCache.Delete(h.hashName)
-	h.live.Close()
+	h.transcoder.Close()
 }
 
+// GetTs returns hls segment(ts) by num
 func (h *Hls) GetTs(key string) ([]byte, bool) {
 	ts, ok := h.tsCache.Get(fmt.Sprintf("/%s/%s/live.ts", h.hashName, key))
 	if !ok {
@@ -149,6 +159,7 @@ func (h *Hls) GetTs(key string) ([]byte, bool) {
 	return ts.([]byte), ok
 }
 
+// GetHashName returns hls hash name
 func (h *Hls) GetHashName() string {
 	return h.hashName
 }

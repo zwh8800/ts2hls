@@ -14,6 +14,7 @@ import (
 var (
 	addr       string
 	tsInterval time.Duration
+	hlsExpire  time.Duration
 )
 
 const (
@@ -28,6 +29,8 @@ func pprof() {
 func main() {
 	args()
 
+	hls.Init(hlsExpire)
+
 	pprof()
 	e := echo.New()
 	e.Use(middleware.Recover(), middleware.Logger())
@@ -40,10 +43,15 @@ func args() {
 	var err error
 	flag.StringVar(&addr, "addr", ":1323", "addr to listen")
 	tsInt := flag.String("i", "1000ms", "ts interval")
+	hlsExp := flag.String("e", "3m", "ts interval")
 	flag.Parse()
 	tsInterval, err = time.ParseDuration(*tsInt)
 	if err != nil {
 		tsInterval = 1000 * time.Millisecond
+	}
+	hlsExpire, err = time.ParseDuration(*hlsExp)
+	if err != nil {
+		tsInterval = 3 * time.Minute
 	}
 }
 

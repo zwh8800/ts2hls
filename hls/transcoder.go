@@ -24,7 +24,10 @@ const (
 	liveStateEnd
 )
 
-type Live struct {
+// Transcoder Converts continuous mpeg ts streams into small segments
+//（segment duration depends on interval param）,
+// it will convert mp2 audio to aac if necessary
+type Transcoder struct {
 	interval time.Duration
 	logger   *zap.SugaredLogger
 
@@ -47,7 +50,8 @@ type Live struct {
 	mpegLastTime *astits.ClockReference
 }
 
-func NewLive(ctx context.Context, src string, interval time.Duration) (*Live, error) {
+// NewTranscoder creates a Transcoder
+func NewTranscoder(ctx context.Context, src string, interval time.Duration) (*Transcoder, error) {
 	client := http.Client{
 		Transport: &http.Transport{
 			ReadBufferSize: 4 * 1024 * 1024, // 4M
@@ -60,7 +64,7 @@ func NewLive(ctx context.Context, src string, interval time.Duration) (*Live, er
 
 	logger, _ := zap.NewProduction()
 
-	l := Live{
+	l := Transcoder{
 		interval: interval,
 		resp:     resp,
 		dmx:      astits.NewDemuxer(ctx, resp.Body),
@@ -72,7 +76,8 @@ func NewLive(ctx context.Context, src string, interval time.Duration) (*Live, er
 	return &l, nil
 }
 
-func (l *Live) ReadInterval() ([]byte, error) {
+// ReadInterval read a segment of ts stream
+func (l *Transcoder) ReadInterval() ([]byte, error) {
 	var err error
 loop:
 	for {
@@ -99,7 +104,7 @@ loop:
 	return l.getTsData(), nil
 }
 
-func (l *Live) getTsData() []byte {
+func (l *Transcoder) getTsData() []byte {
 	buf := l.buf.Bytes()
 	data := make([]byte, len(buf))
 	copy(data, buf)
@@ -107,7 +112,7 @@ func (l *Live) getTsData() []byte {
 	return data
 }
 
-func (l *Live) pat() error {
+func (l *Transcoder) pat() error {
 	for {
 		d, err := l.dmx.NextData()
 		if err != nil {
@@ -127,7 +132,7 @@ func (l *Live) pat() error {
 	}
 }
 
-func (l *Live) pmt() error {
+func (l *Transcoder) pmt() error {
 	for {
 		d, err := l.dmx.NextData()
 		if err != nil {
@@ -181,7 +186,7 @@ func (l *Live) pmt() error {
 	}
 }
 
-func (l *Live) pes() error {
+func (l *Transcoder) pes() error {
 	var startTime *astits.ClockReference
 
 	for {
@@ -252,7 +257,7 @@ func (l *Live) pes() error {
 
 }
 
-func (l *Live) decodeAudio(d *astits.DemuxerData) {
+func (l *Transcoder) decodeAudio(d *astits.DemuxerData) {
 	l.mpegMp2Buf.Write(d.PES.Data)
 	for {
 		sample := l.mpegDecoder.Decode()
@@ -264,7 +269,7 @@ func (l *Live) decodeAudio(d *astits.DemuxerData) {
 	}
 }
 
-func (l *Live) encodeAudio() error {
+func (l *Transcoder) encodeAudio() error {
 	err := l.checkEncoder()
 	if err != nil {
 		return err
@@ -296,7 +301,7 @@ func (l *Live) encodeAudio() error {
 	return nil
 }
 
-func (l *Live) checkEncoder() error {
+func (l *Transcoder) checkEncoder() error {
 	if l.mpegEncoder != nil {
 		return nil
 
@@ -313,6 +318,6 @@ func (l *Live) checkEncoder() error {
 	return nil
 }
 
-func (l *Live) Close() {
+func (l *Transcoder) Close() {
 	_ = l.resp.Body.Close()
 }
