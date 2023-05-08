@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . .
 
 # 在构建阶段编译二进制文件
-RUN go build -o myapp .
+RUN CGO_ENABLED=1 go build -o myapp .
 
 # 第二阶段：执行环境
 FROM alpine:latest
