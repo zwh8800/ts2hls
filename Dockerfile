@@ -8,10 +8,11 @@ WORKDIR /app
 COPY . .
 
 # 构建应用程序
-RUN go build -o myapp
+RUN go build -o ts2hls
 
 # 运行镜像
 FROM debian:buster-slim
 WORKDIR /app
-COPY --from=build /app/myapp .
-CMD ["./myapp"]
+COPY --from=build /app/ts2hls .
+ENTRYPOINT ["tini", "--"]
+CMD ["./ts2hls"]
