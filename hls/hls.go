@@ -129,7 +129,7 @@ func (h *Hls) doLive() {
 			return
 		}
 
-		key := fmt.Sprintf("./%s/%d/live.ts", h.hashName, h.sequence)
+		key := fmt.Sprintf("%s/%d/live.ts", h.hashName, h.sequence)
 
 		h.tsCache.Set(key, data, cache.DefaultExpiration)
 
