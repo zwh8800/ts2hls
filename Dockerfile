@@ -13,6 +13,14 @@ RUN go build -o ts2hls
 # 运行镜像
 FROM debian:buster-slim
 WORKDIR /app
-COPY --from=build /app/ts2hls .
+COPY --from=build /app/myapp .
+
+# 安装tini
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tini && \
+    rm -rf /var/lib/apt/lists/*
+
+# 设置tini作为容器的entrypoint
 ENTRYPOINT ["tini", "--"]
+
 CMD ["./ts2hls"]
