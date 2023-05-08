@@ -43,7 +43,7 @@ func args() {
 	var err error
 	flag.StringVar(&addr, "addr", ":1323", "addr to listen")
 	tsInt := flag.String("i", "1000ms", "ts interval")
-	hlsExp := flag.String("e", "3m", "ts interval")
+	hlsExp := flag.String("e", "3m", "hls interval")
 	flag.Parse()
 	tsInterval, err = time.ParseDuration(*tsInt)
 	if err != nil {
