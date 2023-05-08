@@ -13,7 +13,7 @@ RUN go build -o ts2hls
 # 运行镜像
 FROM debian:buster-slim
 WORKDIR /app
-COPY --from=build /app/myapp .
+COPY --from=build /app/ts2hls .
 
 # 安装tini
 RUN apt-get update && \
