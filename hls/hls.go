@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -129,7 +130,7 @@ func (h *Hls) doLive() {
 			return
 		}
 
-		key := fmt.Sprintf("%s/%d/live.ts", h.hashName, h.sequence)
+		key := h.tsKey(h.hashName, strconv.Itoa(h.sequence))
 
 		h.tsCache.Set(key, data, cache.DefaultExpiration)
 
@@ -152,11 +153,15 @@ func (h *Hls) Close() {
 
 // GetTs returns hls segment(ts) by num
 func (h *Hls) GetTs(key string) ([]byte, bool) {
-	ts, ok := h.tsCache.Get(fmt.Sprintf("/%s/%s/live.ts", h.hashName, key))
+	ts, ok := h.tsCache.Get(h.tsKey(h.hashName, key))
 	if !ok {
 		return nil, ok
 	}
 	return ts.([]byte), ok
+}
+
+func (h *Hls) tsKey(hashName, key string) string {
+	return fmt.Sprintf("%s/%s/live.ts", hashName, key)
 }
 
 // GetHashName returns hls hash name
